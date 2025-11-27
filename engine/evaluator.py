@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import torch
-from utils.box_ops import box_iou
+from utils.box_ops import box_iou, box_cxcywh_to_xyxy
 from dataset.radar_dataset import RadarWindowDataset
 from config import ExperimentConfig
 
@@ -13,98 +13,165 @@ class Evaluator:
 
     @torch.no_grad()
     def evaluate(self, model, test_loader, device, epoch: int, best_map: float):
+        # 切到评估模式与 GPU
         model.eval()
+        # 暂时禁用训练前向（使用 inference 分支）
         prev_trainable = getattr(model, 'trainable', True)
-        model.trainable = False
+        if hasattr(model, 'trainable'):
+            model.trainable = False
 
-        stats = {'tp': [], 'fp': [], 'scores': [], 'n_gt': 0}
+        # 统计量初始化
+        all_scores = []     # 每个预测的分数
+        all_matches = []    # 每个预测是否为TP（1）或FP（0）
+        total_gt = 0        # 全部GT框数量
+        total_tp = 0        # 全部TP数量（用于PD）
+        total_fp = 0        # 全部FP数量（用于PFA）
+        total_non_target_cells = 0  # 非目标方位-距离单元作为PFA分母
 
         for batch in test_loader:
-            images = batch["images"].to(device).float()
-            h, w = images.shape[-2:]
+            # images: [B,C,H,W], targets: List[Dict], batch_size=1
+            images = batch["images"].to(device, non_blocking=True).float()
+            H, W = images.shape[-2], images.shape[-1]
+
+            # GT 框（归一化 cx,cy,w,h）转像素 xyxy
             targets = batch["targets"]
+            tgt = targets[0]
+            gt_cxcywh = tgt["boxes"]  # [N,4], 归一化
+            gt_labels = tgt["labels"] # [N]
+            if gt_cxcywh.numel() > 0:
+                # 反归一化到像素
+                gt_px = gt_cxcywh.clone()
+                gt_px[:, 0] = gt_px[:, 0] * W  # cx
+                gt_px[:, 1] = gt_px[:, 1] * H  # cy
+                gt_px[:, 2] = gt_px[:, 2] * W  # w
+                gt_px[:, 3] = gt_px[:, 3] * H  # h
+                gt_xyxy = box_cxcywh_to_xyxy(gt_px)  # [N,4]
+                # 为 PFA 分母统计目标单元掩膜
+                mask = torch.zeros((H, W), dtype=torch.bool)
+                for b in gt_xyxy:
+                    x1 = int(torch.clamp(b[0], 0, W).item())
+                    y1 = int(torch.clamp(b[1], 0, H).item())
+                    x2 = int(torch.clamp(b[2], 0, W).item())
+                    y2 = int(torch.clamp(b[3], 0, H).item())
+                    if x2 > x1 and y2 > y1:
+                        mask[y1:y2, x1:x2] = True
+                non_target_cells = int(H * W - mask.sum().item())
+                total_non_target_cells += non_target_cells
+            else:
+                gt_xyxy = torch.zeros((0, 4), dtype=torch.float32)
+                total_non_target_cells += H * W
 
-            gt_boxes_cxcywh = targets[0]["boxes"].cpu().numpy()
-            gt_xyxy = []
-            for (cx, cy, bw, bh) in gt_boxes_cxcywh:
-                cx_pix = cx * w; cy_pix = cy * h
-                bw_pix = bw * w; bh_pix = bh * h
-                x1 = max(0.0, cx_pix - bw_pix * 0.5)
-                y1 = max(0.0, cy_pix - bh_pix * 0.5)
-                x2 = min(w, cx_pix + bw_pix * 0.5)
-                y2 = min(h, cy_pix + bh_pix * 0.5)
-                if x2 > x1 and y2 > y1:
-                    gt_xyxy.append([x1, y1, x2, y2])
-            gt_xyxy = np.array(gt_xyxy, dtype=np.float32)
-            stats['n_gt'] += len(gt_xyxy)
+            total_gt += gt_xyxy.shape[0]
 
-            bboxes, scores, labels = model(images)
-            if len(bboxes) == 0:
-                continue
-            order = np.argsort(-scores)
-            bboxes = bboxes[order]
-            scores = scores[order]
-            matched = np.zeros(len(gt_xyxy), dtype=bool)
-            for pb, ps in zip(bboxes, scores):
-                stats['scores'].append(ps)
-                if len(gt_xyxy) == 0:
-                    stats['tp'].append(0); stats['fp'].append(1)
-                    continue
-                pb_t = torch.tensor(pb, dtype=torch.float32).unsqueeze(0)
-                gt_t = torch.tensor(gt_xyxy, dtype=torch.float32)
-                iou_mat, _ = box_iou(pb_t, gt_t)
-                ious = iou_mat.squeeze(0).cpu().numpy()
-                best_idx = int(np.argmax(ious))
-                best_iou = float(ious[best_idx])
-                if best_iou >= self.iou_thresh and (not matched[best_idx]):
-                    stats['tp'].append(1); stats['fp'].append(0)
-                    matched[best_idx] = True
+            # 模型推理（单类：仅用 obj 分数）
+            preds = model(images)
+            # 兼容返回类型：期望 (bboxes, scores, labels)
+            if isinstance(preds, (tuple, list)) and len(preds) >= 2:
+                pred_bboxes, pred_scores = preds[0], preds[1]
+                # 可能是 numpy
+                if isinstance(pred_bboxes, np.ndarray):
+                    pred_bboxes = torch.from_numpy(pred_bboxes)
+                if isinstance(pred_scores, np.ndarray):
+                    pred_scores = torch.from_numpy(pred_scores)
+            else:
+                # 若模型未返回后处理结果，尝试空结果
+                pred_bboxes = torch.zeros((0, 4), dtype=torch.float32)
+                pred_scores = torch.zeros((0,), dtype=torch.float32)
+
+            # 清理非法框
+            if pred_bboxes.numel() > 0:
+                valid = torch.isfinite(pred_bboxes).all(dim=1)
+                proper = (pred_bboxes[:, 2] > pred_bboxes[:, 0]) & (pred_bboxes[:, 3] > pred_bboxes[:, 1])
+                keep = valid & proper
+                pred_bboxes = pred_bboxes[keep]
+                pred_scores = pred_scores[keep]
+
+            # 按分数排序
+            if pred_scores.numel() > 0:
+                order = torch.argsort(pred_scores, descending=True)
+                pred_bboxes = pred_bboxes[order]
+                pred_scores = pred_scores[order]
+
+            # 匹配：贪心按预测遍历，与尚未匹配的GT中 IoU 最大的那个进行配对
+            matched_gt = torch.zeros((gt_xyxy.shape[0],), dtype=torch.bool)
+            for i in range(pred_bboxes.shape[0]):
+                pb = pred_bboxes[i].unsqueeze(0)  # [1,4]
+                score = float(pred_scores[i].item())
+                if gt_xyxy.shape[0] > 0:
+                    ious, _ = box_iou(pb, gt_xyxy)   # [1,N]
+                    ious = ious.squeeze(0)           # [N]
+                    # 将已匹配的GT屏蔽
+                    ious[matched_gt] = -1.0
+                    max_iou, max_j = (float(ious.max().item()), int(torch.argmax(ious).item()))
+                    if max_iou >= self.iou_thresh:
+                        # 计为TP，标记GT已匹配
+                        matched_gt[max_j] = True
+                        all_scores.append(score)
+                        all_matches.append(1)
+                        total_tp += 1
+                    else:
+                        # FP
+                        all_scores.append(score)
+                        all_matches.append(0)
+                        total_fp += 1
                 else:
-                    stats['tp'].append(0); stats['fp'].append(1)
+                    # 无GT，全部FP
+                    all_scores.append(score)
+                    all_matches.append(0)
+                    total_fp += 1
 
-        if stats['n_gt'] == 0 or len(stats['scores']) == 0:
-            mAP = 0.0
+            # 注意：FN 可由 total_gt - 累计TP 推导，无需逐图统计
+
+        # 计算 AP（单类）
+        if len(all_scores) == 0:
+            ap = 0.0
+            pd = 0.0 if total_gt == 0 else 0.0
+            pfa = 0.0
         else:
-            # 1) 将所有预测按置信度从高到低排序（模拟逐步放宽阈值的检索过程）
-            scores_arr = np.array(stats['scores'])
-            tp_arr = np.array(stats['tp'])
-            fp_arr = np.array(stats['fp'])
-            order = np.argsort(-scores_arr)
-            tp_arr = tp_arr[order]
-            fp_arr = fp_arr[order]
+            scores = np.array(all_scores, dtype=np.float32)
+            matches = np.array(all_matches, dtype=np.int32)
 
-            # 2) 计算累积 TP/FP，得到每个阈值下的召回率与精确率曲线点
-            #    tp_cum: 前 k 个预测有多少是真正例
-            #    fp_cum: 前 k 个预测有多少是假正例
-            tp_cum = np.cumsum(tp_arr)
-            fp_cum = np.cumsum(fp_arr)
-            recalls = tp_cum / (stats['n_gt'] + 1e-9)              # 召回率 R = TP / GT
-            precisions = tp_cum / (tp_cum + fp_cum + 1e-9)         # 精确率 P = TP / (TP + FP)
+            # 按分数降序
+            order = np.argsort(-scores)
+            matches = matches[order]
 
-            # 3) 首尾补点，便于做“保序凸包”处理与区间积分
-            mrec = np.concatenate(([0.], recalls, [1.]))
-            mpre = np.concatenate(([0.], precisions, [0.]))
+            tp_cum = np.cumsum(matches)
+            fp_cum = np.cumsum(1 - matches)
 
-            # 4) 单调化精确率（保序）：确保 P(R) 随 R 单调不增，
-            #    等价于对 PR 曲线做上包络，避免局部抖动影响 AP 估计
-            for i in range(len(mpre) - 2, -1, -1):
-                mpre[i] = max(mpre[i], mpre[i + 1])
+            # 召回与精度
+            recall = tp_cum / max(total_gt, 1)
+            precision = tp_cum / np.maximum(tp_cum + fp_cum, 1)
 
-            # 5) 插值积分：对 PR 曲线在召回的离散跳变处做面积累加
-            #    AP = Σ (R_{i+1} - R_i) * P_{i+1}
-            idx = np.where(mrec[1:] != mrec[:-1])[0]
-            mAP = float(np.sum((mrec[idx + 1] - mrec[idx]) * mpre[idx + 1]))
+            # 插值精度包络（从后向前取最大）
+            mrec = np.concatenate(([0.0], recall, [1.0]))
+            mpre = np.concatenate(([0.0], precision, [0.0]))
+            for i in range(mpre.size - 1, 0, -1):
+                mpre[i - 1] = max(mpre[i - 1], mpre[i])
 
-        print(f"[Eval][Epoch {epoch+1}] mAP@0.5(single-class): {mAP:.4f}")
-        if mAP > best_map:
+            # 计算AP为P-R曲线面积
+            # 仅在召回变化处累加
+            i = np.where(mrec[1:] != mrec[:-1])[0]
+            ap = float(np.sum((mrec[i + 1] - mrec[i]) * mpre[i + 1]))
+
+            # 检测概率（PD）
+            pd = float(total_tp / max(total_gt, 1))
+
+            # 虚警概率（PFA）：FP 个数 / 非目标方位-距离单元总数
+            pfa = float(total_fp / max(total_non_target_cells, 1))
+
+        # 保存最好权重
+        if ap > best_map:
             os.makedirs(self.cfg.eval.save_folder, exist_ok=True)
-            save_path = os.path.join(self.cfg.eval.save_folder, f"best_epoch_{epoch+1}_map_{mAP:.4f}.pth")
+            save_path = os.path.join(self.cfg.eval.save_folder, f"best_epoch_{epoch+1}_map_{ap:.4f}.pth")
             torch.save(model.state_dict(), save_path)
-            print(f"[Eval] New best mAP improved from {best_map:.4f} to {mAP:.4f}, saved: {save_path}")
-            best_map = mAP
+            best_map = ap
+            print(f"[Eval] New best mAP={ap:.4f}, PD={pd:.4f}, PFA={pfa:.6f} -> saved: {save_path}")
         else:
-            print(f"[Eval] mAP {mAP:.4f} did not improve best {best_map:.4f}")
+            print(f"[Eval] mAP={ap:.4f}, PD={pd:.4f}, PFA={pfa:.6f}")
 
-        model.trainable = prev_trainable
+        # 复原训练标记
+        if hasattr(model, 'trainable'):
+            model.trainable = prev_trainable
         model.train()
+
         return best_map
