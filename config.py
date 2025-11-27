@@ -87,7 +87,7 @@ class TrainConfig:
     eval_interval: int = 1
     no_aug_epoch: int = 20
     grad_accumulate: int = 1          # 若使用自动计算，会在代码里覆盖
-    batch_size: int = 32
+    batch_size: int = 64
     img_size: int = 640
     fp16: bool = False
     clip_grad: float = 10.0
