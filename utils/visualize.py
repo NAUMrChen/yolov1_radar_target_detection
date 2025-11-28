@@ -1,4 +1,6 @@
 from typing import List, Tuple, Dict, Any, Optional
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 import numpy as np
@@ -11,7 +13,8 @@ def visualize_full_predictions(dataset: radar_dataset.RadarWindowDataset,
                                records: List[Dict[str, Any]],
                                conf_thresh: float = 0.25,
                                iou_thresh: float = 0.5,
-                               max_files: int = 20):
+                               max_files: int = 20,
+                               epoch: Optional[int] = None):
     """
     使用评估阶段缓存的 prediction_records 在整幅距离-方位图上叠加：
       - 预测框 (score>=conf_thresh)
@@ -50,12 +53,19 @@ def visualize_full_predictions(dataset: radar_dataset.RadarWindowDataset,
         v1, v2 = np.percentile(db_full, [1, 99])
         disp = np.clip((db_full - v1) / (v2 - v1 + 1e-6), 0, 1)
 
-        plt.figure(figsize=(7,6))
-        ax = plt.gca()
+        # plt.figure(figsize=(7,6))
+        # ax = plt.gca()
+        # ax.imshow(disp, cmap='viridis', origin='upper')
+        # ax.set_title(f"Full Predictions: {file_name}")
+        # ax.axis('off')
+        H_full, W_full = amp_full.shape
+        target_dpi = 100  # 可调；最终像素 = figsize * dpi = (W_full, H_full)
+        fig = plt.figure(figsize=(W_full / target_dpi, H_full / target_dpi), dpi=target_dpi)
+        fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
+        ax = fig.add_subplot(111)
         ax.imshow(disp, cmap='viridis', origin='upper')
-        ax.set_title(f"Full Predictions: {file_name}")
+        ax.set_title(f"Full Predictions: {file_name}", fontsize=10)
         ax.axis('off')
-
         # 先收集全局 GT
         global_gt = []
         for rec in rec_list:
@@ -99,7 +109,7 @@ def visualize_full_predictions(dataset: radar_dataset.RadarWindowDataset,
                 gx1 = x1 + x0; gy1 = y1 + y0; gx2 = x2 + x0; gy2 = y2 + y0
                 color = 'orange' if is_tp[i] else 'red'
                 rect = Rectangle((gx1, gy1), gx2-gx1, gy2-gy1,
-                                 edgecolor=color, facecolor='none', linewidth=1.1)
+                                 edgecolor=color, facecolor='none', linewidth=1)
                 ax.add_patch(rect)
                 ax.text(gx1, max(0, gy1 - 6),
                         f"{ps[i]:.2f}{' T' if is_tp[i] else ' F'}",
@@ -112,10 +122,15 @@ def visualize_full_predictions(dataset: radar_dataset.RadarWindowDataset,
             Rectangle((0,0),1,1, edgecolor='red', facecolor='none', label='Pred FP'),
         ]
         ax.legend(handles=handles, loc='lower right', fontsize=8)
-        plt.tight_layout()
-        out_path = os.path.join(save_dir, f"{os.path.splitext(file_name)[0]}_full_{shown+1}.png")
-        plt.savefig(out_path, dpi=150, bbox_inches='tight')
-        plt.close()
+        # plt.tight_layout()
+        # out_path = os.path.join(save_dir, f"{os.path.splitext(file_name)[0]}_full_{shown+1}.png")
+        # plt.savefig(out_path, dpi=150, bbox_inches='tight')
+        # plt.close()
+        out_base = os.path.splitext(file_name)[0]
+        suffix = f"_e{epoch}" if epoch is not None else ""
+        out_path = os.path.join(save_dir, f"{out_base}{suffix}_full_{shown+1}.png")
+        fig.savefig(out_path, dpi=target_dpi)  # 输出尺寸应为 (W_full, H_full)
+        plt.close(fig)
         shown += 1
 def visualize_batch_with_full(dataset: radar_dataset.RadarWindowDataset,
                               batch: Dict[str, Any],

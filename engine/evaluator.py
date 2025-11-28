@@ -195,7 +195,8 @@ class Evaluator:
                     records=prediction_records,
                     conf_thresh=self.cfg.eval.conf_thresh,
                     iou_thresh=self.iou_thresh,
-                    max_files=10
+                    max_files=10,
+                    epoch=epoch + 1
                 )
             except Exception as e:
                 print(f"[Eval] 可视化失败: {e}")
