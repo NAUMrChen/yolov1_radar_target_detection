@@ -87,7 +87,7 @@ class TrainConfig:
     eval_interval: int = 1
     no_aug_epoch: int = 20
     grad_accumulate: int = 1          # 若使用自动计算，会在代码里覆盖
-    batch_size: int = 64
+    batch_size: int = 8
     img_size: int = 640
     fp16: bool = False
     clip_grad: float = 10.0
@@ -119,6 +119,7 @@ class ExperimentConfig:
     vis_tgt: bool = False
     vis_aux_loss: bool = False
     tfboard: bool = False
+    vis_pred_full: bool = True
 
     data: DataConfig = field(default_factory=DataConfig)
     augment: AugmentConfig = field(default_factory=AugmentConfig)
@@ -141,7 +142,8 @@ class ExperimentConfig:
             for k, v in items:
                 lines.append(f"  {k}: {v}")
         # 顶层实验参数
-        exp_keys = ["device","distributed","dist_url","world_size","seed","vis_tgt","vis_aux_loss","tfboard"]
+        exp_keys = ["device","distributed","dist_url","world_size","seed",
+                    "vis_tgt","vis_aux_loss","tfboard","vis_pred_full"]
         block("experiment", {k: getattr(self, k) for k in exp_keys})
         # 嵌套配置
         block("data", self.data)
@@ -182,6 +184,7 @@ def load_config(path: Optional[str]) -> ExperimentConfig:
         vis_tgt=data.get('vis_tgt', False),
         vis_aux_loss=data.get('vis_aux_loss', False),
         tfboard=data.get('tfboard', False),
+        vis_pred_full=data.get('vis_pred_full', False),
         data=DataConfig(**data.get('data', {})),
         augment=AugmentConfig(**data.get('augment', {})),
         model=ModelConfig(**data.get('model', {})),

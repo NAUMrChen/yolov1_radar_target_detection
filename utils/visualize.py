@@ -5,7 +5,118 @@ import numpy as np
 import re
 import math
 import dataset.radar_dataset as radar_dataset  # 避免循环导入
+import os
 
+def visualize_full_predictions(dataset: radar_dataset.RadarWindowDataset,
+                               records: List[Dict[str, Any]],
+                               conf_thresh: float = 0.25,
+                               iou_thresh: float = 0.5,
+                               max_files: int = 20):
+    """
+    使用评估阶段缓存的 prediction_records 在整幅距离-方位图上叠加：
+      - 预测框 (score>=conf_thresh)
+      - GT 框
+      - 简单 TP/FP 标记（基于与任意 GT IoU>=iou_thresh）
+    无需重新模型前向。
+    records: [
+      {
+        'file': str,
+        'origin': (y0, x0),
+        'pred_boxes': Tensor[P,4] (窗口内 xyxy),
+        'pred_scores': Tensor[P],
+        'gt_boxes': Tensor[G,4] (窗口内 xyxy)
+      }, ...
+    ]
+    """
+    import torch
+    from utils.box_ops import box_iou
+    # 按文件聚合
+    file_groups: Dict[str, List[Dict[str, Any]]] = {}
+    for r in records:
+        file_groups.setdefault(r["file"], []).append(r)
+    shown = 0
+    eps = 1e-12
+    save_dir = os.path.join("results", "eval_full")
+    os.makedirs(save_dir, exist_ok=True)
+    for file_name, rec_list in file_groups.items():
+        if shown >= max_files:
+            break
+        full_mat = dataset._load_full_matrix(file_name)
+        if np.iscomplexobj(full_mat):
+            amp_full = np.abs(full_mat)
+        else:
+            amp_full = np.abs(full_mat.astype(np.float32))
+        db_full = 20.0 * np.log10(amp_full + eps)
+        v1, v2 = np.percentile(db_full, [1, 99])
+        disp = np.clip((db_full - v1) / (v2 - v1 + 1e-6), 0, 1)
+
+        plt.figure(figsize=(7,6))
+        ax = plt.gca()
+        ax.imshow(disp, cmap='viridis', origin='upper')
+        ax.set_title(f"Full Predictions: {file_name}")
+        ax.axis('off')
+
+        # 先收集全局 GT
+        global_gt = []
+        for rec in rec_list:
+            y0, x0 = rec["origin"]
+            for g in rec["gt_boxes"]:
+                x1,y1,x2,y2 = g.tolist()
+                global_gt.append([x1 + x0, y1 + y0, x2 + x0, y2 + y0])
+        if global_gt:
+            global_gt_t = torch.tensor(global_gt, dtype=torch.float32)
+        else:
+            global_gt_t = torch.zeros((0,4), dtype=torch.float32)
+
+        # 绘制 GT
+        for (x1,y1,x2,y2) in global_gt:
+            rect = Rectangle((x1, y1), x2-x1, y2-y1,
+                             edgecolor='lime', facecolor='none', linewidth=1.0)
+            ax.add_patch(rect)
+
+        # 绘制预测并标记 TP/FP
+        for rec in rec_list:
+            y0, x0 = rec["origin"]
+            pb = rec["pred_boxes"]
+            ps = rec["pred_scores"]
+            if pb.numel() == 0:
+                continue
+            # 过滤阈值
+            keep = ps >= conf_thresh
+            pb = pb[keep]
+            ps = ps[keep]
+            if pb.numel() == 0:
+                continue
+            # IoU 与 TP 判定
+            if global_gt_t.numel() > 0:
+                ious, _ = box_iou(pb, global_gt_t)  # [P, G]
+                max_iou, _ = ious.max(dim=1)
+                is_tp = max_iou >= iou_thresh
+            else:
+                is_tp = torch.zeros((pb.shape[0],), dtype=torch.bool)
+            for i in range(pb.shape[0]):
+                x1,y1,x2,y2 = pb[i].tolist()
+                gx1 = x1 + x0; gy1 = y1 + y0; gx2 = x2 + x0; gy2 = y2 + y0
+                color = 'orange' if is_tp[i] else 'red'
+                rect = Rectangle((gx1, gy1), gx2-gx1, gy2-gy1,
+                                 edgecolor=color, facecolor='none', linewidth=1.1)
+                ax.add_patch(rect)
+                ax.text(gx1, max(0, gy1 - 6),
+                        f"{ps[i]:.2f}{' T' if is_tp[i] else ' F'}",
+                        color=color, fontsize=7, backgroundcolor='black')
+
+        # 图例
+        handles = [
+            Rectangle((0,0),1,1, edgecolor='lime', facecolor='none', label='GT'),
+            Rectangle((0,0),1,1, edgecolor='orange', facecolor='none', label='Pred TP'),
+            Rectangle((0,0),1,1, edgecolor='red', facecolor='none', label='Pred FP'),
+        ]
+        ax.legend(handles=handles, loc='lower right', fontsize=8)
+        plt.tight_layout()
+        out_path = os.path.join(save_dir, f"{os.path.splitext(file_name)[0]}_full_{shown+1}.png")
+        plt.savefig(out_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        shown += 1
 def visualize_batch_with_full(dataset: radar_dataset.RadarWindowDataset,
                               batch: Dict[str, Any],
                               complex_mode: str = "abs",

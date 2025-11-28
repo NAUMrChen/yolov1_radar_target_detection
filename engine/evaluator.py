@@ -4,7 +4,7 @@ import torch
 from utils.box_ops import box_iou, box_cxcywh_to_xyxy
 from dataset.radar_dataset import RadarWindowDataset
 from config import ExperimentConfig
-
+from utils.visualize import visualize_full_predictions
 
 class Evaluator:
     def __init__(self, cfg: ExperimentConfig):
@@ -23,6 +23,7 @@ class Evaluator:
         # 统计量初始化
         all_scores = []     # 每个预测的分数
         all_matches = []    # 每个预测是否为TP（1）或FP（0）
+        prediction_records = []
         total_gt = 0        # 全部GT框数量
         total_tp = 0        # 全部TP数量（用于PD）
         total_fp = 0        # 全部FP数量（用于PFA）
@@ -32,7 +33,7 @@ class Evaluator:
             # images: [B,C,H,W], targets: List[Dict], batch_size=1
             images = batch["images"].to(device, non_blocking=True).float()
             H, W = images.shape[-2], images.shape[-1]
-
+            metas = batch.get("batch_meta", None)
             # GT 框（归一化 cx,cy,w,h）转像素 xyxy
             targets = batch["targets"]
             tgt = targets[0]
@@ -121,6 +122,18 @@ class Evaluator:
                     total_fp += 1
 
             # 注意：FN 可由 total_gt - 累计TP 推导，无需逐图统计
+            if metas is not None:
+                # 仅支持 batch_size=1 情况（当前数据集似乎如此）
+                file_name = metas[0]["file"]
+                y0, x0 = metas[0]["global_origin"]
+                # 保存局部预测框与 GT（均为窗口内坐标）
+                prediction_records.append({
+                    "file": file_name,
+                    "origin": (y0, x0),
+                    "pred_boxes": pred_bboxes.cpu(),
+                    "pred_scores": pred_scores.cpu(),
+                    "gt_boxes": gt_xyxy.cpu(),  # 已是像素 xyxy（窗口内）
+                })      
 
         # 计算 AP（单类）
         if len(all_scores) == 0:
@@ -173,5 +186,17 @@ class Evaluator:
         if hasattr(model, 'trainable'):
             model.trainable = prev_trainable
         model.train()
-
+        if self.cfg.vis_pred_full and prediction_records:
+            try:
+                dataset = test_loader.dataset
+                print("[Eval] 可视化整幅检测结果 (已缓存预测)")
+                visualize_full_predictions(
+                    dataset=dataset,
+                    records=prediction_records,
+                    conf_thresh=self.cfg.eval.conf_thresh,
+                    iou_thresh=self.iou_thresh,
+                    max_files=10
+                )
+            except Exception as e:
+                print(f"[Eval] 可视化失败: {e}")
         return best_map
