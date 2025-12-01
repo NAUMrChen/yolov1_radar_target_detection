@@ -65,7 +65,7 @@ class Trainer:
         train_loader = DataLoader(
             train_dataset,
             batch_size=self.cfg.train.batch_size,
-            shuffle=False,
+            shuffle=self.cfg.train.shuffle,
             num_workers=train_dataset.__len__() if self.cfg.train.num_workers_train < 0 else self.cfg.train.num_workers_train,
             collate_fn=RadarWindowDataset.collate_fn,
             pin_memory=True,

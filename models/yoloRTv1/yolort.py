@@ -189,7 +189,7 @@ class ResNet(nn.Module):
         self.layer1 = self._make_layer(block, 64, layers[0])
         self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
-        self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
+        # self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -239,9 +239,9 @@ class ResNet(nn.Module):
         c2 = self.layer1(c2)   # [B, C, H/4, W/4]
         c3 = self.layer2(c2)   # [B, C, H/8, W/8]
         c4 = self.layer3(c3)   # [B, C, H/16, W/16]
-        c5 = self.layer4(c4)   # [B, C, H/32, W/32]
+        # c5 = self.layer4(c4)   # [B, C, H/32, W/32]
 
-        return c5
+        return c4
 
 # Spatial Pyramid Pooling
 class SPPF(nn.Module):
@@ -345,19 +345,19 @@ class YOLORTv1(nn.Module):
         self.trainable = trainable         # 训练的标记
         self.conf_thresh = conf_thresh     # 得分阈值
         self.nms_thresh = nms_thresh       # NMS阈值
-        self.stride = 32                   # 网络的最大步长
+        self.stride = 16                   # 网络的最大步长
         self.deploy = deploy
         
         # ------------------- 网络结构 -------------------
         ## 主干网络
         in_channels = cfg.get('in_channels', 1)
-        self.backbone = ResNet(BasicBlock, [2, 2, 2, 2], in_channels=in_channels)
+        self.backbone = ResNet(BasicBlock, [2, 2, 2], in_channels=in_channels)
         if cfg.get('pretrained', True):
             state_dict = torch.load("./weights/resnet18-5c106cde.pth",
                                     map_location=lambda storage, loc: storage)
             state_dict = _adapt_first_conv_weight(state_dict, in_channels)
             self.backbone.load_state_dict(state_dict, strict=False)
-        feat_dim=512
+        feat_dim=256
 
         ## 颈部网络
         out_dim=512

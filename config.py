@@ -5,6 +5,17 @@ import os
 
 
 # ---------------------------- 数据配置 ----------------------------
+# ---------------------------- 增强配置 ----------------------------
+@dataclass
+class AugmentConfig:
+    norm_mode: str = "standard"
+    vertical_flip_prob: float = 0.5
+    clutter_prob: float = 0.3
+    snr_range: Tuple[float, float] = (0.0, 20.0)
+    background_only: bool = False
+    mosaic: Optional[float] = None
+    mixup: Optional[float] = None
+
 @dataclass
 class DataConfig:
     mat_dir: str = "./dataset/data"
@@ -23,18 +34,34 @@ class DataConfig:
     def num_classes(self) -> int:
         return len(self.class_mapping)
 
-
-# ---------------------------- 增强配置 ----------------------------
+# ---------------------------- 训练配置 ----------------------------
 @dataclass
-class AugmentConfig:
-    norm_mode: str = "standard"
-    vertical_flip_prob: float = 0.5
-    clutter_prob: float = 0.3
-    snr_range: Tuple[float, float] = (0.0, 20.0)
-    background_only: bool = False
-    mosaic: Optional[float] = None
-    mixup: Optional[float] = None
+class TrainConfig:
+    max_epoch: int = 15
+    warmup_epoch: int = 1
+    eval_interval: int = 1
+    no_aug_epoch: int = 20
+    grad_accumulate: int = 1          # 若使用自动计算，会在代码里覆盖
+    batch_size: int = 64
+    shuffle: bool = True
+    img_size: int = 640
+    fp16: bool = False
+    clip_grad: float = 10.0
+    persistent_workers: bool = True
+    num_workers_train: int = 8
+    num_workers_test: int = 1
 
+
+# ---------------------------- 评估与保存配置 ----------------------------
+@dataclass
+class EvalConfig:
+    conf_thresh: float = 0.8
+    nms_thresh: float = 0.6
+    topk: int = 1000
+    iou_thresh: float = 0.5
+    save_folder: str = "weights/"
+    resume: Optional[str] = None
+    pretrained_weights: Optional[str] = None
 
 # ---------------------------- 模型配置 ----------------------------
 @dataclass
@@ -79,33 +106,6 @@ class SchedulerConfig:
     warmup_bias_lr: float = 0.1
 
 
-# ---------------------------- 训练配置 ----------------------------
-@dataclass
-class TrainConfig:
-    max_epoch: int = 15
-    warmup_epoch: int = 1
-    eval_interval: int = 1
-    no_aug_epoch: int = 20
-    grad_accumulate: int = 1          # 若使用自动计算，会在代码里覆盖
-    batch_size: int = 64
-    img_size: int = 640
-    fp16: bool = False
-    clip_grad: float = 10.0
-    persistent_workers: bool = True
-    num_workers_train: int = 8
-    num_workers_test: int = 1
-
-
-# ---------------------------- 评估与保存配置 ----------------------------
-@dataclass
-class EvalConfig:
-    conf_thresh: float = 0.8
-    nms_thresh: float = 0.6
-    topk: int = 1000
-    iou_thresh: float = 0.5
-    save_folder: str = "weights/"
-    resume: Optional[str] = None
-    pretrained_weights: Optional[str] = None
 
 
 # ---------------------------- 总实验配置 ----------------------------

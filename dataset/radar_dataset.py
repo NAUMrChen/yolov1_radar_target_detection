@@ -1,5 +1,7 @@
 import os
 import csv
+import json
+import hashlib
 from typing import List, Tuple, Dict, Any, Optional
 import numpy as np
 import torch
@@ -165,6 +167,126 @@ class RadarWindowDataset(Dataset):
         self.index: List[Tuple[str, int, int]] = []
         self._build_index()
 
+    def _index_cache_key(self) -> str:
+        """
+        生成影响窗口索引的哈希键：
+        - 文件列表及其 (size, mtime)
+        - 参数: window_size, stride, subset, azimuth_split_ratio
+        注：索引仅与矩阵尺寸有关，不与标注或 complex_mode 等无关。
+        """
+        h = hashlib.sha256()
+        # 参与的参数
+        payload = {
+            "window_size": (self.window_h, self.window_w),
+            "stride": (self.stride_h, self.stride_w),
+            "subset": self.subset,
+            "azimuth_split_ratio": self.azimuth_split_ratio,
+            # 若未来索引逻辑依赖其他参数，可加入
+        }
+        h.update(json.dumps(payload, sort_keys=True).encode("utf-8"))
+
+        # 文件列表及其 stat 信息
+        for fname in self.files:
+            fpath = os.path.join(self.mat_dir, fname)
+            try:
+                st = os.stat(fpath)
+                # 使用 (size, mtime) 即可感知变更
+                h.update(fname.encode("utf-8"))
+                h.update(str(st.st_size).encode("utf-8"))
+                h.update(str(int(st.st_mtime)).encode("utf-8"))
+            except FileNotFoundError:
+                # 若缺失视为不同键
+                h.update((fname + ":missing").encode("utf-8"))
+
+        return h.hexdigest()
+
+    def _index_cache_path(self) -> str:
+        cache_dir = os.path.join(self.mat_dir, ".cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        key = self._index_cache_key()
+        return os.path.join(cache_dir, f"index_{key}.json")
+
+    def _load_index_cache(self) -> Optional[List[Tuple[str, int, int]]]:
+        path = self._index_cache_path()
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            # 验证基本结构
+            idx = data.get("index")
+            files = data.get("files")
+            if not isinstance(idx, list) or not isinstance(files, list):
+                return None
+            # 文件列表一致性检查
+            if files != self.files:
+                return None
+            # 转换为期望类型
+            out = []
+            for item in idx:
+                # item = [file, y0, x0]
+                if not (isinstance(item, list) and len(item) == 3):
+                    return None
+                out.append((item[0], int(item[1]), int(item[2])))
+            return out
+        except Exception:
+            return None
+
+    def _save_index_cache(self, index_list: List[Tuple[str, int, int]]) -> None:
+        path = self._index_cache_path()
+        try:
+            payload = {
+                "files": self.files,
+                "index": [[f, int(y0), int(x0)] for (f, y0, x0) in index_list],
+            }
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False)
+        except Exception:
+            # 缓存失败不影响正常流程
+            pass
+
+    def _build_index(self):
+        # 先尝试加载缓存
+        cached = self._load_index_cache()
+        if cached is not None:
+            self.index = cached
+            # 保持缓存对象，但清空已加载矩阵（索引不需要矩阵）
+            self.cache = LRUCacheMat(self.cache.max_size)
+            return
+
+        # 未命中缓存，则正常构建
+        index: List[Tuple[str, int, int]] = []
+
+        for file in self.files:
+            # 仅为获取 H,W 需要读取一次矩阵的形状；为了减少内存压力，不保留整阵。
+            # 使用已有加载函数，但不持久缓存该矩阵（随即清空 LRU 以释放）
+            full = self._load_full_matrix(file)
+            H, W = full.shape  # Y, X
+
+            y_positions = list(range(0, max(H - self.window_h + 1, 0), self.stride_h))
+            x_positions = list(range(0, max(W - self.window_w + 1, 0), self.stride_w))
+            if not y_positions or y_positions[-1] + self.window_h < H:
+                y_positions.append(max(H - self.window_h, 0))
+            if not x_positions or x_positions[-1] + self.window_w < W:
+                x_positions.append(max(W - self.window_w, 0))
+
+            boundary_y = int(H * self.azimuth_split_ratio)
+            for y0 in y_positions:
+                center_y = y0 + self.window_h / 2.0
+                if self.subset == 'train' and center_y >= boundary_y:
+                    continue
+                if self.subset == 'test' and center_y < boundary_y:
+                    continue
+                for x0 in x_positions:
+                    index.append((file, y0, x0))
+
+            # 释放当前矩阵，避免占用LRU空间
+            self.cache = LRUCacheMat(self.cache.max_size)
+
+        self.index = index
+        # 保存缓存以便下次快速加载
+        self._save_index_cache(self.index)
+
     def _load_full_matrix(self, file: str) -> np.ndarray:
         path = os.path.join(self.mat_dir, file)
         arr = self.cache.get(path)
@@ -177,37 +299,37 @@ class RadarWindowDataset(Dataset):
             self.cache.put(path, arr)
         return arr
 
-    def _build_index(self):
-        # 利用步长生成窗口起点，并附加最后一个起点以覆盖尾部:
-        # y_positions = 0, stride_h, ..., (H - win_h) 或补 (H - win_h)
-        # x_positions 同理
-        # Padding 情况: 若窗口越界底部或右侧，用 padding_value 填充
-        for file in self.files:
-            mat = self._load_full_matrix(file)
-            H, W = mat.shape  # Y, X
-            # 计算覆盖窗口起点 (包含尾部需要 padding 的窗口)
-            y_positions = list(range(0, max(H - self.window_h + 1, 0), self.stride_h))
-            x_positions = list(range(0, max(W - self.window_w + 1, 0), self.stride_w))
-            # 尾部补一个起点确保覆盖最后区域
-            if not y_positions or y_positions[-1] + self.window_h < H:
-                y_positions.append(max(H - self.window_h, 0))
-            if not x_positions or x_positions[-1] + self.window_w < W:
-                x_positions.append(max(W - self.window_w, 0))
+    # def _build_index(self):
+    #     # 利用步长生成窗口起点，并附加最后一个起点以覆盖尾部:
+    #     # y_positions = 0, stride_h, ..., (H - win_h) 或补 (H - win_h)
+    #     # x_positions 同理
+    #     # Padding 情况: 若窗口越界底部或右侧，用 padding_value 填充
+    #     for file in self.files:
+    #         mat = self._load_full_matrix(file)
+    #         H, W = mat.shape  # Y, X
+    #         # 计算覆盖窗口起点 (包含尾部需要 padding 的窗口)
+    #         y_positions = list(range(0, max(H - self.window_h + 1, 0), self.stride_h))
+    #         x_positions = list(range(0, max(W - self.window_w + 1, 0), self.stride_w))
+    #         # 尾部补一个起点确保覆盖最后区域
+    #         if not y_positions or y_positions[-1] + self.window_h < H:
+    #             y_positions.append(max(H - self.window_h, 0))
+    #         if not x_positions or x_positions[-1] + self.window_w < W:
+    #             x_positions.append(max(W - self.window_w, 0))
                     
-            boundary_y = int(H * self.azimuth_split_ratio)  # 分割阈值
-            for y0 in y_positions:
-                center_y = y0 + self.window_h / 2.0
-                # 根据 subset 过滤
-                if self.subset == 'train' and center_y >= boundary_y:
-                    continue
-                if self.subset == 'test' and center_y < boundary_y:
-                    continue
-                for x0 in x_positions:
-                    self.index.append((file, y0, x0))
+    #         boundary_y = int(H * self.azimuth_split_ratio)  # 分割阈值
+    #         for y0 in y_positions:
+    #             center_y = y0 + self.window_h / 2.0
+    #             # 根据 subset 过滤
+    #             if self.subset == 'train' and center_y >= boundary_y:
+    #                 continue
+    #             if self.subset == 'test' and center_y < boundary_y:
+    #                 continue
+    #             for x0 in x_positions:
+    #                 self.index.append((file, y0, x0))
                     
-        # 释放已加载矩阵，保留缓存机制
-        # 可选择清空缓存以控制初始内存
-        self.cache = LRUCacheMat(self.cache.max_size)
+    #     # 释放已加载矩阵，保留缓存机制
+    #     # 可选择清空缓存以控制初始内存
+    #     self.cache = LRUCacheMat(self.cache.max_size)
 
     def __len__(self):
         return len(self.index)
