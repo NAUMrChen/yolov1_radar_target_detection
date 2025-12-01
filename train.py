@@ -63,7 +63,6 @@ def main():
     best_map = trainer.run(evaluator=evaluator)
     print("Training finished. Best mAP(single-class): {:.4f}".format(best_map))
 
-
 if __name__ == '__main__':
     main()
 
