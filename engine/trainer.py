@@ -1,4 +1,4 @@
-import os
+import random
 import time
 import numpy as np
 import torch
@@ -14,6 +14,15 @@ from utils.solver.lr_scheduler import build_lr_scheduler
 
 from config import ExperimentConfig
 
+# 顶层全局：为 worker 初始化提供基础种子
+WORKER_BASE_SEED = None
+
+def dataloader_worker_init_fn(worker_id: int):
+    base = WORKER_BASE_SEED or 0
+    worker_seed = int(base) + int(worker_id)
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+    torch.manual_seed(worker_seed)
 
 class Trainer:
     def __init__(self, cfg: ExperimentConfig):
@@ -62,6 +71,16 @@ class Trainer:
 
     def _build_dataloaders(self):
         train_dataset, test_dataset = self._build_datasets()
+        # 统一 DataLoader 随机种子
+        g = None
+        worker_init_fn = None
+        if self.cfg.deterministic:
+            g = torch.Generator()
+            g.manual_seed(self.cfg.seed)
+            global WORKER_BASE_SEED
+            WORKER_BASE_SEED = self.cfg.seed
+            worker_init_fn = dataloader_worker_init_fn
+
         train_loader = DataLoader(
             train_dataset,
             batch_size=self.cfg.train.batch_size,
@@ -70,6 +89,8 @@ class Trainer:
             collate_fn=RadarWindowDataset.collate_fn,
             pin_memory=True,
             persistent_workers=self.cfg.train.persistent_workers,
+            generator=g,
+            worker_init_fn=worker_init_fn
         )
         test_loader = DataLoader(
             test_dataset,

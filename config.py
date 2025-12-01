@@ -115,7 +115,8 @@ class ExperimentConfig:
     distributed: bool = False
     dist_url: str = "env://"
     world_size: int = 1
-    seed: int = 42
+    deterministic: bool = True
+    seed: int = 40
     vis_tgt: bool = False
     vis_aux_loss: bool = False
     tfboard: bool = False
@@ -128,6 +129,16 @@ class ExperimentConfig:
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
+
+    def apply_seed(self, deterministic: bool = True):
+        import random, numpy as np, torch
+        if deterministic:
+            random.seed(self.seed)
+            np.random.seed(self.seed)
+            torch.manual_seed(self.seed)
+            torch.cuda.manual_seed_all(self.seed)
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
 
     def summary(self) -> str:
         lines = ["===== Experiment Configuration ====="]
@@ -143,7 +154,7 @@ class ExperimentConfig:
                 lines.append(f"  {k}: {v}")
         # 顶层实验参数
         exp_keys = ["device","distributed","dist_url","world_size","seed",
-                    "vis_tgt","vis_aux_loss","tfboard","vis_pred_full"]
+                    "deterministic","vis_tgt","vis_aux_loss","tfboard","vis_pred_full"]
         block("experiment", {k: getattr(self, k) for k in exp_keys})
         # 嵌套配置
         block("data", self.data)
@@ -180,6 +191,7 @@ def load_config(path: Optional[str]) -> ExperimentConfig:
         distributed=data.get('distributed', False),
         dist_url=data.get('dist_url', 'env://'),
         world_size=data.get('world_size', 1),
+        # deterministic=data.get('deterministic', False),
         seed=data.get('seed', 42),
         vis_tgt=data.get('vis_tgt', False),
         vis_aux_loss=data.get('vis_aux_loss', False),

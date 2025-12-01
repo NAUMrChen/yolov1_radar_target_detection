@@ -1,10 +1,9 @@
 """统一的训练入口，使用独立的 Trainer 与 Evaluator 类。"""
 
 import argparse
-import torch
-
 from config import ExperimentConfig, load_config
 from engine import Trainer, Evaluator
+
 
 
 # ---------------------------- 命令行解析（仅覆盖关键参数） ----------------------------
@@ -46,6 +45,7 @@ def parse_args():
 def main():
     args = parse_args()
     cfg = load_config(args.config)
+    cfg.apply_seed(deterministic=cfg.deterministic)
     # 覆盖简单参数
     if args.device: cfg.device = args.device
     if args.batch_size: cfg.train.batch_size = args.batch_size
