@@ -1,6 +1,6 @@
 from typing import List, Tuple, Dict, Any, Optional
 import matplotlib
-# matplotlib.use('Agg')
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 import numpy as np

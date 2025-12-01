@@ -26,7 +26,7 @@ class DataConfig:
     stride_test: Tuple[int, int] = (640, 640)
     complex_mode: str = "abs"
     class_mapping: Dict[str, int] = field(default_factory=lambda: {"mt": 0, "wm": 1, "uk": 2})
-    cache_mat_train: int = 8
+    cache_mat_train: int = 64
     cache_mat_test: int = 4
     azimuth_split_ratio: float = 0.7
 
@@ -37,13 +37,13 @@ class DataConfig:
 # ---------------------------- 训练配置 ----------------------------
 @dataclass
 class TrainConfig:
-    max_epoch: int = 15
+    max_epoch: int = 20
     warmup_epoch: int = 1
     eval_interval: int = 1
     no_aug_epoch: int = 20
     grad_accumulate: int = 1          # 若使用自动计算，会在代码里覆盖
     batch_size: int = 64
-    shuffle: bool = True
+    shuffle: bool = False
     img_size: int = 640
     fp16: bool = False
     clip_grad: float = 10.0
