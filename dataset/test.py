@@ -43,7 +43,7 @@ if __name__ == "__main__":
     # )
 
     # 统计与可视化
-    stats = compute_and_visualize_stats(train_dataset)
+    # stats = compute_and_visualize_stats(train_dataset)
     from torch.utils.data import DataLoader
     loader = DataLoader(train_dataset,
                         batch_size=8,

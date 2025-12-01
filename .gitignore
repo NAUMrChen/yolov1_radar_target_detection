@@ -2,4 +2,5 @@
 *.pth
 *.pyc
 *.png
+index*.json
 __pycache__/
