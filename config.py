@@ -10,7 +10,7 @@ class DataConfig:
     mat_dir: str = "./dataset/data"
     csv_path: str = "./dataset/data/data_mat.csv"
     window_size_train: Tuple[int, int] = (640, 640)
-    stride_train: Tuple[int, int] = (320, 320)
+    stride_train: Tuple[int, int] = (160, 160)
     window_size_test: Tuple[int, int] = (640, 640)
     stride_test: Tuple[int, int] = (640, 640)
     complex_mode: str = "abs"
@@ -99,7 +99,7 @@ class TrainConfig:
 # ---------------------------- 评估与保存配置 ----------------------------
 @dataclass
 class EvalConfig:
-    conf_thresh: float = 0.005
+    conf_thresh: float = 0.8
     nms_thresh: float = 0.6
     topk: int = 1000
     iou_thresh: float = 0.5

@@ -1,6 +1,6 @@
 from typing import List, Tuple, Dict, Any, Optional
 import matplotlib
-matplotlib.use('Agg')
+# matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 import numpy as np
@@ -127,8 +127,8 @@ def visualize_full_predictions(dataset: radar_dataset.RadarWindowDataset,
         # plt.savefig(out_path, dpi=150, bbox_inches='tight')
         # plt.close()
         out_base = os.path.splitext(file_name)[0]
-        suffix = f"_e{epoch}" if epoch is not None else ""
-        out_path = os.path.join(save_dir, f"{out_base}{suffix}_full_{shown+1}.png")
+        suffix = f"e{epoch}_" if epoch is not None else ""
+        out_path = os.path.join(save_dir, f"{suffix}{out_base}_full_{shown+1}.png")
         fig.savefig(out_path, dpi=target_dpi)  # 输出尺寸应为 (W_full, H_full)
         plt.close(fig)
         shown += 1

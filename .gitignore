@@ -1,4 +1,5 @@
 *.mat
 *.pth
 *.pyc
+*.png
 __pycache__/
