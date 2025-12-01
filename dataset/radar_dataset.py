@@ -299,38 +299,6 @@ class RadarWindowDataset(Dataset):
             self.cache.put(path, arr)
         return arr
 
-    # def _build_index(self):
-    #     # 利用步长生成窗口起点，并附加最后一个起点以覆盖尾部:
-    #     # y_positions = 0, stride_h, ..., (H - win_h) 或补 (H - win_h)
-    #     # x_positions 同理
-    #     # Padding 情况: 若窗口越界底部或右侧，用 padding_value 填充
-    #     for file in self.files:
-    #         mat = self._load_full_matrix(file)
-    #         H, W = mat.shape  # Y, X
-    #         # 计算覆盖窗口起点 (包含尾部需要 padding 的窗口)
-    #         y_positions = list(range(0, max(H - self.window_h + 1, 0), self.stride_h))
-    #         x_positions = list(range(0, max(W - self.window_w + 1, 0), self.stride_w))
-    #         # 尾部补一个起点确保覆盖最后区域
-    #         if not y_positions or y_positions[-1] + self.window_h < H:
-    #             y_positions.append(max(H - self.window_h, 0))
-    #         if not x_positions or x_positions[-1] + self.window_w < W:
-    #             x_positions.append(max(W - self.window_w, 0))
-                    
-    #         boundary_y = int(H * self.azimuth_split_ratio)  # 分割阈值
-    #         for y0 in y_positions:
-    #             center_y = y0 + self.window_h / 2.0
-    #             # 根据 subset 过滤
-    #             if self.subset == 'train' and center_y >= boundary_y:
-    #                 continue
-    #             if self.subset == 'test' and center_y < boundary_y:
-    #                 continue
-    #             for x0 in x_positions:
-    #                 self.index.append((file, y0, x0))
-                    
-    #     # 释放已加载矩阵，保留缓存机制
-    #     # 可选择清空缓存以控制初始内存
-    #     self.cache = LRUCacheMat(self.cache.max_size)
-
     def __len__(self):
         return len(self.index)
 
