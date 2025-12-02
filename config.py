@@ -29,7 +29,8 @@ class DataConfig:
     cache_mat_train: int = 64
     cache_mat_test: int = 4
     azimuth_split_ratio: float = 0.7
-
+    full_frame: bool = False
+    
     @property
     def num_classes(self) -> int:
         return len(self.class_mapping)

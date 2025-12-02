@@ -1,6 +1,6 @@
 from typing import List, Tuple, Dict, Any, Optional
 import matplotlib
-matplotlib.use('Agg')
+# matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 import numpy as np
@@ -183,8 +183,11 @@ def visualize_batch_with_full(dataset: radar_dataset.RadarWindowDataset,
         for si in show_indices:
             m = metas[si]
             y0, x0 = m["global_origin"]
+            # 每样本实际窗口尺寸来自张量形状 [C,H,W]
+            H_win = int(images[si].shape[-2])
+            W_win = int(images[si].shape[-1])
             rect = Rectangle((x0, y0),
-                             dataset.window_w, dataset.window_h,
+                             W_win, H_win,
                              edgecolor='red', facecolor='none', linewidth=1.0)
             ax_full.add_patch(rect)
             ax_full.text(x0 + 2, y0 + 14, f"{si}", color='yellow',
@@ -253,7 +256,28 @@ def compute_and_visualize_stats(dataset: radar_dataset.RadarWindowDataset):
     min_area = dataset.min_box_area
 
     # 遍历所有窗口索引 (file, y0, x0)
+    # ========= 先统计窗口目标数量分布 =========
+    min_area = dataset.min_box_area
+
     for file, y0, x0 in dataset.index:
+        # 动态窗口尺寸
+        if getattr(dataset, "full_frame", False):
+            full = dataset._load_full_matrix(file)
+            H, W = full.shape
+            boundary_y = int(H * dataset.azimuth_split_ratio)
+            if dataset.subset == 'train':
+                win_h = max(boundary_y, 1)
+                win_w = W
+            elif dataset.subset == 'test':
+                win_h = max(H - boundary_y, 1)
+                win_w = W
+            else:
+                win_h = H
+                win_w = W
+        else:
+            win_h = dataset.window_h
+            win_w = dataset.window_w
+
         boxes = dataset.file_to_boxes.get(file, [])
         count_in_window = 0
         win_x1, win_y1 = x0, y0

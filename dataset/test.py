@@ -29,8 +29,9 @@ if __name__ == "__main__":
         class_mapping={"mt": 0, "wm": 1, "uk":2},
         cache_mat_files=8,
         transform=None,
-        subset='train',
-        azimuth_split_ratio=0.7
+        subset='test',
+        azimuth_split_ratio=0.7,
+        full_frame=True
     )  
     # from utils.visualize import analyze_and_visualize_wm_diff
     # stats_wm = analyze_and_visualize_wm_diff(
@@ -46,8 +47,8 @@ if __name__ == "__main__":
     # stats = compute_and_visualize_stats(train_dataset)
     from torch.utils.data import DataLoader
     loader = DataLoader(train_dataset,
-                        batch_size=8,
-                        shuffle=True,
+                        batch_size=1,
+                        shuffle=False,
                         num_workers=0,
                         collate_fn=RadarWindowDataset.collate_fn)
 

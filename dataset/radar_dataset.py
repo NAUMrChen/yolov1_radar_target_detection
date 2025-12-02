@@ -132,7 +132,8 @@ class RadarWindowDataset(Dataset):
         filter_difficult: bool = False,
         transform=None,
         subset: Optional[str] = None,
-        azimuth_split_ratio: float = 0.7
+        azimuth_split_ratio: float = 0.7,
+        full_frame: bool = False
     ):
         self.mat_dir = mat_dir
         self.csv_path = csv_path
@@ -148,6 +149,10 @@ class RadarWindowDataset(Dataset):
         self.transform = transform
         self.subset = subset  # 'train' / 'test' / None
         self.azimuth_split_ratio = azimuth_split_ratio
+        self.full_frame = full_frame
+
+        if self.full_frame:
+            self.window_h, self.window_w = -1, -1
 
         # 读取标注
         ann_items = boxes_csv_reader(csv_path)
@@ -181,6 +186,7 @@ class RadarWindowDataset(Dataset):
             "stride": (self.stride_h, self.stride_w),
             "subset": self.subset,
             "azimuth_split_ratio": self.azimuth_split_ratio,
+            "full_frame": self.full_frame,
             # 若未来索引逻辑依赖其他参数，可加入
         }
         h.update(json.dumps(payload, sort_keys=True).encode("utf-8"))
@@ -246,7 +252,36 @@ class RadarWindowDataset(Dataset):
             pass
 
     def _build_index(self):
-        # 先尝试加载缓存
+
+        index: List[Tuple[str, int, int]] = []
+
+        if self.full_frame:
+            index = []
+            for file in self.files:
+                full = self._load_full_matrix(file)
+                H, W = full.shape
+                boundary_y = int(H * self.azimuth_split_ratio)
+                if self.subset == 'train':
+                    seg_y0 = 0
+                    seg_h = max(boundary_y, 1)
+                elif self.subset == 'test':
+                    seg_y0 = boundary_y
+                    seg_h = max(H - boundary_y, 1)
+                else:
+                    seg_y0 = 0
+                    seg_h = H
+                # 更新当前窗口尺寸为该文件段的真实尺寸
+                if seg_h > self.window_h:
+                    self.window_h = seg_h
+                self.window_w = W
+                index.append((file, seg_y0, 0))
+                # 释放缓存对象，保持轻量
+                self.cache = LRUCacheMat(self.cache.max_size)
+            self.index = index
+            self._save_index_cache(self.index)
+            return
+        
+        # 先尝试加载缓存,不适用整帧模式
         cached = self._load_index_cache()
         if cached is not None:
             self.index = cached
@@ -255,8 +290,6 @@ class RadarWindowDataset(Dataset):
             return
 
         # 未命中缓存，则正常构建
-        index: List[Tuple[str, int, int]] = []
-
         for file in self.files:
             # 仅为获取 H,W 需要读取一次矩阵的形状；为了减少内存压力，不保留整阵。
             # 使用已有加载函数，但不持久缓存该矩阵（随即清空 LRU 以释放）
