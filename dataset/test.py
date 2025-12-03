@@ -29,7 +29,7 @@ if __name__ == "__main__":
         class_mapping={"mt": 0, "wm": 1, "uk":2},
         cache_mat_files=8,
         transform=None,
-        subset='test',
+        subset='train',
         azimuth_split_ratio=0.7,
         full_frame=True
     )  
