@@ -3,6 +3,7 @@ import matplotlib
 # matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
+from utils.box_ops import rescale_bboxes
 import numpy as np
 import re
 import math
@@ -506,6 +507,140 @@ def compute_and_visualize_stats(dataset: radar_dataset.RadarWindowDataset):
         "scr_per_class": scr_per_class,
         "window_obj_counts": window_obj_counts
     }
+
+def visualize_single_frame_dets_and_gt(
+    images,
+    pred_bboxes,
+    pred_scores,
+    targets,
+    raw_boxes,
+    conf_thresh: float = 0.25,
+    complex_mode: str = "abs",
+    save_path: Optional[str] = None,
+    save_dir: Optional[str] = None,
+    show: bool = True,
+    dpi: int = 100
+):
+    """
+    在单帧图像上可视化检测结果与GT。
+    - images: Tensor 或 np.ndarray，形状支持 [B,C,H,W] 或 [C,H,W]；已做 AmplitudeNormalize + PadToStride
+    - pred_bboxes: Tensor/np.ndarray [N,4]，绝对坐标 xyxy
+    - pred_scores: Tensor/np.ndarray [N]
+    - targets: Dict，含 'boxes' [M,4] 归一化坐标 cxcywh 或 xyxy? 本项目采用 yolo 归一化的 xyxy，请按当前实现读取
+      若为归一化 xyxy，则按当前图像尺寸反归一化；若为归一化 cxcywh 则先转回 xyxy
+    """
+    import numpy as np
+    import torch
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
+
+    # 统一张量为CPU numpy
+    def to_numpy(x):
+        if x is None:
+            return None
+        if isinstance(x, torch.Tensor):
+            return x.detach().cpu().numpy()
+        elif isinstance(x, np.ndarray):
+            return x
+        else:
+            return np.array(x)
+
+    imgs_np = to_numpy(images)
+    preds_np = to_numpy(pred_bboxes)
+    scores_np = to_numpy(pred_scores)
+
+    # 取单帧 [C,H,W]
+    if imgs_np.ndim == 4:  # [B,C,H,W]
+        img_np = imgs_np[0]
+    elif imgs_np.ndim == 3:  # [C,H,W]
+        img_np = imgs_np
+    else:
+        raise ValueError(f"images 维度不支持: {imgs_np.shape}")
+
+    C, H, W = img_np.shape
+
+    # 显示底图：AmplitudeNormalize 后本身在 [0,1]；若为复栈，取幅度显示
+    if C == 2:
+        real = img_np[0]
+        imag = img_np[1]
+        disp = np.sqrt(real ** 2 + imag ** 2)
+    else:
+        disp = img_np[0]
+
+    # 组装检测框（过滤阈值）
+    if preds_np is None or preds_np.size == 0:
+        preds_np = np.zeros((0, 4), dtype=np.float32)
+        scores_np = np.zeros((0,), dtype=np.float32)
+    else:
+        # 按阈值过滤
+        keep = scores_np >= float(conf_thresh)
+        preds_np = preds_np[keep]
+        scores_np = scores_np[keep]
+
+    # 处理 GT（targets 归一化坐标 -> 绝对坐标）
+    gt_boxes_abs = np.zeros((0, 4), dtype=np.float32)
+    gt_labels = None
+    if targets is not None and isinstance(targets, dict):
+        boxes = targets.get("boxes", None)
+        labels = targets.get("labels", None)
+        if boxes is not None:
+            boxes_np = to_numpy(boxes).astype(np.float32)
+            # 尝试判断坐标制：若值大多在 [0,1]，视为归一化
+            if boxes_np.size > 0 and (boxes_np.max() <= 1.5):
+                # 假设为归一化 xyxy（本仓库 RadarWindowDataset 的 yolo_boxes 为 xyxy 归一化）
+                # 若实际为 cxcywh，可在此分支改为先 box_cxcywh_to_xyxy
+                gt_boxes_abs = boxes_np.copy()
+                gt_boxes_abs[..., [0, 2]] = gt_boxes_abs[..., [0, 2]] * W
+                gt_boxes_abs[..., [1, 3]] = gt_boxes_abs[..., [1, 3]] * H
+            else:
+                # 已是绝对坐标
+                gt_boxes_abs = boxes_np
+        if labels is not None:
+            gt_labels = to_numpy(labels).astype(np.int32)
+
+    
+    # 绘图
+    target_dpi = dpi
+    fig = plt.figure(figsize=(W / target_dpi, H / target_dpi), dpi=target_dpi)
+    fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
+    ax = fig.add_subplot(111)
+    ax.imshow(disp, cmap='viridis', origin='upper')
+    ax.axis('off')
+    ax.set_title("Detections vs GT", fontsize=10)
+
+    gt_boxes_abs=to_numpy(raw_boxes['boxes'])
+    # 绘制 GT：绿色
+    for i in range(gt_boxes_abs.shape[0]):
+        x1, y1, x2, y2 = gt_boxes_abs[i][2:]
+        w_box = max(0.0, x2 - x1)
+        h_box = max(0.0, y2 - y1)
+        rect = Rectangle((x1, y1), w_box, h_box, linewidth=1.0, edgecolor='lime', facecolor='none')
+        ax.add_patch(rect)
+        if gt_labels is not None:
+            ax.text(x1, y1 - 1, f"GT:{int(gt_labels[i])}", color='lime', fontsize=8, va='bottom')
+
+    # 绘制检测：红色，带 score
+    for i in range(preds_np.shape[0]):
+        x1, y1, x2, y2 = preds_np[i]
+        w_box = max(0.0, x2 - x1)
+        h_box = max(0.0, y2 - y1)
+        rect = Rectangle((x1, y1), w_box, h_box, linewidth=1.0, edgecolor='red', facecolor='none')
+        ax.add_patch(rect)
+        sc = float(scores_np[i]) if i < len(scores_np) else 0.0
+        ax.text(x1, y1 - 1, f"Det:{sc:.2f}", color='red', fontsize=8, va='bottom')
+
+    # 保存或显示
+    if save_path is None and save_dir is not None:
+        import os
+        os.makedirs(save_dir, exist_ok=True)
+        save_path = os.path.join(save_dir, "single_frame_dets_gt.png")
+
+    if save_path is not None:
+        fig.savefig(save_path, dpi=target_dpi)
+    if show:
+        plt.show()
+    plt.close(fig)
+   
 
 
 def analyze_and_visualize_wm_diff(

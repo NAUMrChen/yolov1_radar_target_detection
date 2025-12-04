@@ -11,25 +11,31 @@ class RadarTargetTracker:
         self.loader = DataLoader(dataset,
                                  batch_size=1,
                                  shuffle=False,
-                                 num_workers=cfg.eval.num_workers,
-                                 collate_fn=RadarWindowDataset.collate_fn)
+                                 num_workers=1,
+                                 collate_fn=RadarWindowDataset.collate_fn,
+                                 pin_memory=True)
     def run(self):
         device = self.cfg.device
         self.detector.to(device)
         self.detector.eval()
 
         for batch in self.loader:
-            images = batch["images"].to(device, non_blocking=True).float()
+            image = batch["images"].to(device, non_blocking=True).float()
+            targets=batch["targets"]
             metas = batch.get("batch_meta", None)
 
             # 目标检测
             with torch.no_grad():
-                outputs = self.detector(images)
+                outputs = self.detector(image)
 
             # 提取检测结果
-            pred_boxes = outputs[0]['boxes'].cpu().numpy()  # [N,4] xyxy
-            pred_scores = outputs[0]['scores'].cpu().numpy()  # [N]
-            pred_labels = outputs[0]['labels'].cpu().numpy()  # [N]
+            pred_bboxes, pred_scores = outputs[0], outputs[1]
+
+            # 可视化单帧检测结果
+            from utils.visualize import visualize_single_frame_dets_and_gt
+            # visualize_single_frame_dets_and_gt(image, pred_bboxes, pred_scores, targets[0])
+            visualize_single_frame_dets_and_gt(image, pred_bboxes, pred_scores, batch['raw_boxes'],batch["targets"][0])
+
 
             # 准备 DeepSort 输入格式
             detections = []

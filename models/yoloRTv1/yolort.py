@@ -404,7 +404,7 @@ class YOLORTv1(nn.Module):
             用于生成G矩阵，其中每个元素都是特征图上的像素坐标。
         """
         # 特征图的宽和高
-        ws, hs = fmp_size
+        hs, ws = fmp_size
 
         # 生成网格的x坐标和y坐标
         grid_y, grid_x = torch.meshgrid([torch.arange(hs), torch.arange(ws)],indexing='ij')

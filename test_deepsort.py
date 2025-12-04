@@ -1,11 +1,14 @@
 import argparse
 from config import  load_config
+import torch
 
 from dataset.radar_dataset import RadarWindowDataset
 from models.yoloRTv1.yolort import YOLORTv1
 from deep_sort.deep_sort import DeepSort
 from trackers.radar_target_tracker import RadarTargetTracker
-
+from dataset.data_augment.radar_augment import PadToStride
+from dataset.data_augment.radar_augment import AmplitudeNormalize
+from dataset.data_augment.radar_augment import Compose
 def parse_args():
     parser = argparse.ArgumentParser(description='YOLO Radar Training')
     parser.add_argument('--config', type=str, default=None, help='Path to JSON config file.')
@@ -41,28 +44,29 @@ if __name__ == "__main__":
     deepsort_dataset = RadarWindowDataset(
         mat_dir=".\dataset\data",
         csv_path=".\dataset\data\data_mat.csv",
-        window_size=(640, 640),
-        stride=(640, 640),
         complex_mode="abs",
         class_mapping={"mt": 0, "wm": 1, "uk":2},
         cache_mat_files=64,
-        transform=None,
+        transform=Compose([AmplitudeNormalize(mode=cfg.augment.norm_mode), 
+                           PadToStride(stride=16, pad_value=0.0)]),
         subset='test',
         azimuth_split_ratio=0.7,
         full_frame=True
     )
-    
-
-    radar_target_tracker = RadarTargetTracker(
-        cfg=cfg,
-        dataset=deepsort_dataset,
-        detector=YOLORTv1(
+    detector=YOLORTv1(
             cfg=cfg.model.to_dict(),
             device=cfg.device,
             num_classes=cfg.data.num_classes,
             conf_thresh=cfg.eval.conf_thresh,
-            nms_thresh=cfg.eval.nms_thresh,
-        ),
+            nms_thresh=cfg.eval.nms_thresh)
+    weights_path="./weights/best_epoch_35_map_0.4619.pth"
+    state_dict = torch.load(weights_path, map_location=cfg.device)
+    detector.load_state_dict(state_dict)
+
+    radar_target_tracker = RadarTargetTracker(
+        cfg=cfg,
+        dataset=deepsort_dataset,
+        detector=detector,
         tracker=DeepSort(
             model_path=cfg.deepsort.model_path,
             max_dist=cfg.deepsort.max_dist,

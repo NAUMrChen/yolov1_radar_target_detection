@@ -125,7 +125,7 @@ class RadarWindowDataset(Dataset):
         stride: Tuple[int, int] = (256, 256),
         var_name: str = "data_raw",
         padding_value: float = 0.0,
-        complex_mode: str = "stack",
+        complex_mode: str = "abs",
         class_mapping: Optional[Dict[str, int]] = None,
         min_box_area: float = 4.0,
         cache_mat_files: int = 4,

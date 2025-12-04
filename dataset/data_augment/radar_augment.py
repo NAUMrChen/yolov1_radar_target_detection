@@ -184,6 +184,59 @@ class SeaClutterInjection:
         image = torch.from_numpy(out)
         return image, raw_boxes
 
+class PadToStride:
+    """将输入 [C,H,W] 通过右侧与下侧填充对齐到 stride 的最小倍数，不缩放图像。推荐在归一化后进行填充，避免归一化对填充值的再处理。
+    - 仅填充：不改变原像素位置，左/上对齐
+    - 更新 raw_boxes: x/y 坐标保持不变；x2/y2 不变；无需平移
+    - 填充值:
+        complex(stack)通道: 用 0 填充 real/imag
+        幅度/归一化通道: 默认 0.0
+    """
+    def __init__(self, stride: int = 32, pad_value: float = 0.0):
+        assert stride > 0
+        self.stride = stride
+        self.pad_value = pad_value
+
+    def __call__(self, image: torch.Tensor, raw_boxes: np.ndarray):
+        # image: [C,H,W]
+        C, H, W = image.shape
+        s = self.stride
+
+        def _ceil_to_stride(x: int, s: int) -> int:
+            return ((x + s - 1) // s) * s
+
+        H_pad = _ceil_to_stride(H, s)
+        W_pad = _ceil_to_stride(W, s)
+
+        if H_pad == H and W_pad == W:
+            # 已经是 stride 倍数，直接返回
+            return image, raw_boxes
+
+        pad_bottom = H_pad - H
+        pad_right = W_pad - W
+
+        # 构造填充张量：仅在下/右进行填充，左/上不填充
+        if C == 2:
+            # complex stack: real/imag 填 0
+            pad_tensor = torch.zeros((C, H_pad, W_pad), dtype=image.dtype)
+        else:
+            pad_tensor = torch.full((C, H_pad, W_pad), fill_value=self.pad_value, dtype=image.dtype)
+
+        # 将原图拷贝到左上角
+        pad_tensor[:, :H, :W] = image
+        image = pad_tensor
+
+        # raw_boxes 坐标无需平移；但要裁剪到新边界（避免越界）
+        if raw_boxes.shape[0] > 0:
+            # [class_id, obj_id, x1, y1, x2, y2]
+            # 保持 x1,y1,x2,y2 不变，但剪裁到 [0,W_pad] / [0,H_pad]
+            raw_boxes[:, 2] = np.clip(raw_boxes[:, 2], 0, W_pad - 1)
+            raw_boxes[:, 4] = np.clip(raw_boxes[:, 4], 0, W_pad)
+            raw_boxes[:, 3] = np.clip(raw_boxes[:, 3], 0, H_pad - 1)
+            raw_boxes[:, 5] = np.clip(raw_boxes[:, 5], 0, H_pad)
+
+        return image, raw_boxes
+
 
 # 便捷函数：构造典型增强流水线
 def build_radar_augmentation(

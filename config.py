@@ -88,6 +88,15 @@ class ModelConfig:
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
+@dataclass
+class DeepSortConfig:
+    model_path: str = "./deep_sort/deep/checkpoint/ckpt.t7"
+    max_dist: float = 0.2
+    max_iou_distance: float = 0.7
+    max_age: int = 70
+    n_init: int = 3
+    nn_budget: Optional[int] = None
+
 
 # ---------------------------- 优化器配置 ----------------------------
 @dataclass
@@ -126,6 +135,7 @@ class ExperimentConfig:
     data: DataConfig = field(default_factory=DataConfig)
     augment: AugmentConfig = field(default_factory=AugmentConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
+    deepsort: DeepSortConfig = field(default_factory=DeepSortConfig)
     optim: OptimConfig = field(default_factory=OptimConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
